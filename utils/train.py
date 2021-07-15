@@ -31,7 +31,7 @@ def _do_prediction(outputs):
     return outputs.max(dim=1)[1]
 
 
-def validate_model(model, validloader, criterion, device="cuda"):
+def validate_model(model, validloader, criterion, device="cuda", show_progress=False):
     model.to(device)
     model.eval()
 
@@ -40,7 +40,12 @@ def validate_model(model, validloader, criterion, device="cuda"):
     total = 0
 
     with torch.no_grad():
-        for batch in validloader:
+        loader = validloader
+        if show_progress:
+            progressbar = ProgressBar()
+            loader = progressbar(validloader)
+
+        for batch in loader:
             batch = [
                 data.to(device) if torch.is_tensor(data) else data for data in batch
             ]
