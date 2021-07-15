@@ -1,0 +1,5 @@
+/.vscode
+/checkpoints
+/.ipynb_checkpoints
+/VQA2
+*.pyc
