@@ -24,11 +24,11 @@ def _do_criterion(criterion, outputs, labels):
     return criterion(outputs, labels)
 
 
-def _do_prediction(outputs):
+def _do_prediction(outputs,k):
     if _is_binary(outputs):
         outputs = outputs.view(-1)
         return (outputs > 0.5) * 1
-    return outputs.max(dim=1)[1]
+    return torch.topk(outputs,k=k,dim=1)[1]
 
 
 def validate_model(model, validloader, criterion, device="cuda", show_progress=False):
@@ -36,6 +36,7 @@ def validate_model(model, validloader, criterion, device="cuda", show_progress=F
     model.eval()
 
     test_loss = 0
+    topk_accuracy = 0
     accuracy = 0
     total = 0
 
@@ -54,12 +55,17 @@ def validate_model(model, validloader, criterion, device="cuda", show_progress=F
 
             outputs = model.forward(*inputs)
             test_loss += _do_criterion(criterion, outputs, labels).item()
-
-            equality = labels.data == _do_prediction(outputs)
+            
+            equality = labels.data == _do_prediction(outputs,k=1)[:,0]
             accuracy += equality.type(torch.FloatTensor).sum()
+            
+            preds = _do_prediction(outputs,k=5)
+            for i in range(5):
+                equality = labels.data == preds[:,i]
+                topk_accuracy += equality.type(torch.FloatTensor).sum()
+                
             total += len(labels)
-
-    return float(test_loss / len(validloader)), float(accuracy / total)
+    return float(test_loss / len(validloader)), float(accuracy / total), float(topk_accuracy / total)
 
 
 def save_model(model: nn.Module, checkpoint_path: str):
@@ -101,8 +107,11 @@ def train_model(
     steps = 0
     train_loss_history = []
     train_accuracy_history = []
+    train_topk_accuracy_history = []
     valid_loss_history = []
     valid_accuracy_history = []
+    valid_topk_accuracy_history = []
+    
 
     def dumpy_history():
         return {
@@ -111,8 +120,10 @@ def train_model(
             "total_steps": steps,
             "train_loss_history": train_loss_history,
             "train_accuracy_history": train_accuracy_history,
+            "train_topk_accuracy_history": train_topk_accuracy_history,
             "valid_loss_history": valid_loss_history,
             "valid_accuracy_history": valid_accuracy_history,
+            "valid_topk_accuracy_history": valid_topk_accuracy_history
         }
 
     for e in range(epochs):
@@ -142,9 +153,20 @@ def train_model(
 
             # Record loss and accuracy
             train_loss_history.append(loss.item())
-            equality = labels.data == _do_prediction(outputs)
+            
+            equality = labels.data == _do_prediction(outputs,k=1)
             accuracy = equality.type(torch.FloatTensor).mean()
             train_accuracy_history.append(float(accuracy))
+            
+            preds = _do_prediction(outputs,5)
+            topk_accuracy = 0
+            for i in range(5):
+                equality = labels.data == preds[:,i]
+                topk_accuracy += equality.type(torch.FloatTensor).sum()
+            topk_accuracy = topk_accuracy / len(labels.data)
+            train_topk_accuracy_history.append(float(topk_accuracy))
+            
+            
 
             if steps % valid_every == 0:
                 # Eval mode for predictions
@@ -152,12 +174,13 @@ def train_model(
 
                 # Turn off gradients for validation
                 with torch.no_grad():
-                    valid_loss, valid_accuracy = validate_model(
+                    valid_loss, valid_accuracy, valid_topk_accuracy = validate_model(
                         model, validloader, criterion, device
                     )
 
                 valid_loss_history.append(valid_loss)
                 valid_accuracy_history.append(valid_accuracy)
+                valid_topk_accuracy_history.append(valid_topk_accuracy)
 
                 # Dump history
                 history = dumpy_history()
@@ -166,11 +189,13 @@ def train_model(
                 ) as fp:
                     json.dump(history, fp)
                 fig = plt.figure(figsize=(8, 8))
-                ax1 = fig.add_subplot(211)
-                ax2 = fig.add_subplot(212)
-                _plot_history(history, ax1, ax2)
+                ax1 = fig.add_subplot(311)
+                ax2 = fig.add_subplot(312)
+                ax3 = fig.add_subplot(313)
+                _plot_history(history, ax1, ax2, ax3)
                 ax1.legend()
                 ax2.legend()
+                ax3.legend()
                 fig.savefig(os.path.join(checkpoints_dir, "history.png"))
                 plt.close(fig)
 
@@ -181,15 +206,18 @@ def train_model(
             # Update progress bar
             avg_loss = _running_average(train_loss_history, valid_every)
             avg_accuracy = _running_average(train_accuracy_history, valid_every)
+            avg_topk_accuracy = _running_average(train_topk_accuracy_history, valid_every)
             content = [
                 "loss: {:.3f}".format(avg_loss),
                 "accuracy: {:.3f}".format(avg_accuracy),
+                "topk_accuracy: {:.3f}".format(avg_topk_accuracy)
             ]
             if validated:
                 content.extend(
                     [
                         "val_loss: {:.3f}".format(valid_loss_history[-1]),
                         "val_accuracy: {:.3f}".format(valid_accuracy_history[-1]),
+                        "val_topk_accuracy: {:.3f}".format(valid_topk_accuracy_history[-1])
                     ]
                 )
             progressbar.set_content(" - ".join(content))
@@ -204,13 +232,15 @@ def train_model(
     return dumpy_history()
 
 
-def _plot_history(history, ax_loss, ax_accuracy, label_suffix="", index=-1):
+def _plot_history(history, ax_loss, ax_accuracy, ax_topk_accuracy, label_suffix="", index=-1):
     epoch_size = history["epoch_size"]
     valid_every = history["valid_every"]
     train_loss_history = history["train_loss_history"]
     valid_loss_history = history["valid_loss_history"]
     train_accuracy_history = history["train_accuracy_history"]
     valid_accuracy_history = history["valid_accuracy_history"]
+    train_topk_accuracy_history = history["train_topk_accuracy_history"]
+    valid_topk_accuracy_history = history["valid_topk_accuracy_history"]
 
     train_steps = np.array(range(valid_every, len(train_loss_history) + 1)) / epoch_size
     valid_steps = (
@@ -223,6 +253,10 @@ def _plot_history(history, ax_loss, ax_accuracy, label_suffix="", index=-1):
     train_accuracy_history = np.convolve(
         train_accuracy_history, np.ones(valid_every) / valid_every, mode="valid"
     )
+    train_topk_accuracy_history = np.convolve(
+        train_topk_accuracy_history, np.ones(valid_every) / valid_every, mode="valid"
+    )
+
 
     train_style, valid_style = {}, {}
     if index >= 0:
@@ -254,15 +288,29 @@ def _plot_history(history, ax_loss, ax_accuracy, label_suffix="", index=-1):
         label="validation accuracy" + label_suffix,
         **valid_style,
     )
+    ax_topk_accuracy.plot(
+        train_steps,
+        train_topk_accuracy_history,
+        label="training topk accuracy" + label_suffix,
+        **train_style,
+    )
+    ax_topk_accuracy.plot(
+        valid_steps,
+        valid_topk_accuracy_history,
+        label="validation topk accuracy" + label_suffix,
+        **valid_style,
+    )
 
 
 def plot_history(history: Dict[str, Any]) -> None:
     fig = plt.figure(figsize=(8, 8))
-    ax1 = fig.add_subplot(211)
-    ax2 = fig.add_subplot(212)
-    _plot_history(history, ax1, ax2)
+    ax1 = fig.add_subplot(311)
+    ax2 = fig.add_subplot(312)
+    ax3 = fig.add_subplot(313)
+    _plot_history(history, ax1, ax2, ax3)
     ax1.legend()
     ax2.legend()
+    ax3.legend()
     plt.show()
 
 
@@ -278,8 +326,10 @@ def plot_history_from_checkpoints(checkpoints: List[str]) -> None:
             for key in (
                 "train_loss_history",
                 "train_accuracy_history",
+                "train_topk_accuracy_history",
                 "valid_loss_history",
                 "valid_accuracy_history",
+                "valid_topk_accuracy_history"
             ):
                 history[key].extend(h[key])
     if history is not None:
@@ -288,12 +338,14 @@ def plot_history_from_checkpoints(checkpoints: List[str]) -> None:
 
 def plot_histories(histories: Dict[str, Dict[str, Any]], loss_ylim=(0.0, 0.8)):
     fig = plt.figure(figsize=(8, 8))
-    ax1 = fig.add_subplot(211)
+    ax1 = fig.add_subplot(311)
     if loss_ylim:
         ax1.set_ylim(loss_ylim)
-    ax2 = fig.add_subplot(212)
+    ax2 = fig.add_subplot(312)
+    ax3 = fig.add_subplot(313)
     for i, (annotation, history) in enumerate(histories.items()):
-        _plot_history(history, ax1, ax2, f" ({annotation})", i)
+        _plot_history(history, ax1, ax2, ax3, f" ({annotation})", i)
     ax1.legend()
     ax2.legend()
+    ax3.legend()
     plt.show()
