@@ -154,7 +154,7 @@ def train_model(
             # Record loss and accuracy
             train_loss_history.append(loss.item())
             
-            equality = labels.data == _do_prediction(outputs,k=1)
+            equality = labels.data == _do_prediction(outputs,k=1)[:,0]
             accuracy = equality.type(torch.FloatTensor).mean()
             train_accuracy_history.append(float(accuracy))
             
