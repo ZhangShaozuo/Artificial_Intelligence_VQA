@@ -2,6 +2,7 @@ import io
 import json
 import os
 import zipfile
+import string
 from typing import Any, Callable, Dict, Iterable, Optional, Union
 
 from PIL import Image
@@ -107,11 +108,14 @@ class VQA2Dataset(Dataset):
             annotations[annotation["question_id"]] = annotation
 
         self._questions = []
+        self.info = {"number":0,"yes/no":0,"other":0}
+        self.statics = {}
         for question in questions_json["questions"]:
             annotation = annotations[question["question_id"]]
             question_text = question["question"]
             image_id = question["image_id"]
             answer = annotation["multiple_choice_answer"]
+            answer_type = annotation["answer_type"]
             if not filter_func(question, annotation):
                 continue
             if group == "val" and image_id < val_test_split:
@@ -119,6 +123,8 @@ class VQA2Dataset(Dataset):
             if group == "test" and image_id >= val_test_split:
                 continue
             self._questions.append((image_id, question_text, answer))
+            self.info[answer_type]+=1
+            self._update_statics(question_text, answer)
 
         self._coco_zip = zipfile.ZipFile(self.coco_path, mode="r")
 
@@ -155,7 +161,21 @@ class VQA2Dataset(Dataset):
             and os.path.exists(self.questions_path)
             and os.path.exists(self.annotations_path)
         )
-
+    
+    def _update_statics(self, question_text, answer):
+        question_t2l = question_text.split()
+        for qn in question_t2l:
+            qn=qn.translate(str.maketrans('','',string.punctuation))
+            qn=qn.lower()
+            if qn not in self.statics.keys():
+                self.statics[qn]=1
+            else:
+                self.statics[qn]+=1
+        if answer.lower() not in self.statics.keys():
+            self.statics[answer.lower()]=1
+        else:
+            self.statics[answer.lower()]+=1
+            
     def download(self) -> None:
         """Download the VQA2 dataset if it doesn't exist"""
         if self._check_exists():
