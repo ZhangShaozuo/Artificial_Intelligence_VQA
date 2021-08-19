@@ -33,3 +33,7 @@ The model weights and model architecture used for demo is allocated at ```/model
 
 ```/utils/helper.py``` Customized process bar for training
 
+## Report
+
+Experiment settings, result discussion see the report ```50.021 AI-VQA-Project.pdf```
+
